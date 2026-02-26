@@ -1,0 +1,69 @@
+# ─────────────────────────────────────────────────────────
+#  EMS Backend — .gitignore
+# ─────────────────────────────────────────────────────────
+
+# ── Environment Variables — KABHI PUSH MAT KARO ─────────
+.env
+.env.local
+.env.production
+.env.staging
+.env.*.local
+
+# ── Firebase Service Account JSON ───────────────────────
+# Agar alag JSON file rakhi ho toh yeh bhi ignore karo
+firebase-service-account.json
+*-service-account.json
+serviceAccountKey.json
+firebase-adminsdk*.json
+
+# ── Node Modules ─────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ── Logs ─────────────────────────────────────────────────
+logs/
+*.log
+combined.log
+error.log
+
+# ── Uploaded Files ───────────────────────────────────────
+uploads/
+# Agar uploads folder commit karna ho toh sirf folder rakhna
+# uploads/.gitkeep → yeh ek empty file rakho folder ke liye
+uploads/*
+!uploads/.gitkeep
+# ── Prisma Generated ─────────────────────────────────────
+# Generated client push nahi karte — npx prisma generate se banta hai
+node_modules/.prisma/
+
+# ── Build / Compiled ─────────────────────────────────────
+dist/
+build/
+.next/
+
+# ── OS Files ─────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+desktop.ini
+
+# ── IDE / Editor ─────────────────────────────────────────
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
+
+# ── Testing ──────────────────────────────────────────────
+coverage/
+.nyc_output/
+
+# ── Misc ─────────────────────────────────────────────────
+.cache/
+tmp/
+temp/
