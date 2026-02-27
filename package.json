@@ -1,40 +1,40 @@
 {
   "name": "ems-backend",
   "version": "1.0.0",
-  "description": "Employee Management System - Backend API",
-  "main": "server.js",
-  "type": "commonjs",
+  "description": "EMS Pro - Complete HR & Payroll Backend API",
+  "main": "src/server.js",
   "scripts": {
-    "dev": "nodemon server.js",
-    "start": "node server.js",
-    "db:generate": "prisma generate",
-    "db:push": "prisma db push",
-    "db:migrate": "prisma migrate dev",
-    "db:studio": "prisma studio",
-    "db:seed": "node prisma/seed.js"
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "migrate": "npx prisma migrate dev",
+    "migrate:prod": "npx prisma migrate deploy",
+    "seed": "node src/database/seed.js",
+    "generate": "npx prisma generate",
+    "studio": "npx prisma studio"
   },
   "dependencies": {
-    "@prisma/client": "^5.10.0",
+    "@prisma/client": "^5.14.0",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
+    "dayjs": "^1.11.11",
     "dotenv": "^16.4.5",
-    "express": "^4.18.3",
-    "express-rate-limit": "^7.2.0",
+    "excel4node": "^1.8.2",
     "exceljs": "^4.4.0",
-    "firebase-admin": "^12.0.0",
-    "geolib": "^3.3.4",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.3.1",
+    "express-validator": "^7.1.0",
+    "firebase-admin": "^12.2.0",
     "helmet": "^7.1.0",
-    "joi": "^17.12.2",
     "jsonwebtoken": "^9.0.2",
-    "jspdf": "^2.5.1",
     "morgan": "^1.10.0",
     "multer": "^1.4.5-lts.1",
-    "node-cron": "^3.0.3",
-    "nodemailer": "^6.9.13",
-    "winston": "^3.13.0"
+    "nodemailer": "^6.9.14",
+    "pdfkit": "^0.15.0",
+    "prisma": "^5.14.0",
+    "uuid": "^10.0.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
-    "nodemon": "^3.1.0",
-    "prisma": "^5.10.0"
+    "nodemon": "^3.1.4"
   }
 }

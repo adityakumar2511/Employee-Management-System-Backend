@@ -1,0 +1,457 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─── ENUMS ────────────────────────────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  EMPLOYEE
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  HALF_DAY
+  ON_LEAVE
+  PERSONAL_HOLIDAY
+  WFH
+  HOLIDAY
+  WEEKEND
+}
+
+enum LeaveStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum PayrollStatus {
+  DRAFT
+  GENERATED
+  PAID
+}
+
+enum TaskStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  OVERDUE
+}
+
+enum TaskPriority {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum SalaryComponentType {
+  EARNING
+  DEDUCTION
+}
+
+enum SalaryComponentCalc {
+  FIXED
+  PERCENTAGE
+}
+
+enum HolidayType {
+  NATIONAL
+  STATE
+  COMPANY
+}
+
+enum WFHStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// ─── MODELS ───────────────────────────────────────────────────────────────────
+
+model Employee {
+  id           String         @id @default(uuid())
+  employeeId   String         @unique // e.g. EMP001
+  name         String
+  email        String         @unique
+  phone        String?
+  passwordHash String
+  role         Role           @default(EMPLOYEE)
+  status       EmployeeStatus @default(ACTIVE)
+
+  // Professional
+  department    Department? @relation(fields: [departmentId], references: [id])
+  departmentId  String?
+  designation   String?
+  joiningDate   DateTime?
+  reportingTo   Employee?   @relation("ReportingChain", fields: [reportingToId], references: [id])
+  reportingToId String?
+  subordinates  Employee[]  @relation("ReportingChain")
+
+  // Personal
+  dateOfBirth DateTime?
+  gender      String?
+  address     String?
+  avatar      String?
+
+  // Banking / Payroll
+  panNumber   String?
+  bankName    String?
+  bankAccount String?
+  bankIfsc    String?
+
+  // FCM
+  fcmToken String?
+
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  attendances      Attendance[]
+  leavesApplied    Leave[]
+  leaveBalances    LeaveBalance[]
+  payrolls         Payroll[]
+  tasksAssigned    Task[]                  @relation("TaskAssignee")
+  tasksCreated     Task[]                  @relation("TaskCreator")
+  personalHolidays PersonalHoliday[]
+  phBalance        PersonalHolidayBalance?
+  salaryStructure  SalaryStructure?
+  documents        EmployeeDocument[]
+  refreshTokens    RefreshToken[]
+  otps             OTP[]
+  wfhRequests      WFHRequest[]
+
+  @@index([departmentId])
+  @@index([status])
+}
+
+model Department {
+  id        String     @id @default(uuid())
+  name      String     @unique
+  employees Employee[]
+  createdAt DateTime   @default(now())
+}
+
+model RefreshToken {
+  id         String   @id @default(uuid())
+  token      String   @unique
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  employeeId String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+
+  @@index([employeeId])
+}
+
+model OTP {
+  id         String   @id @default(uuid())
+  email      String
+  otp        String
+  expiresAt  DateTime
+  used       Boolean  @default(false)
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  employeeId String
+  createdAt  DateTime @default(now())
+}
+
+model Attendance {
+  id               String           @id @default(uuid())
+  employee         Employee         @relation(fields: [employeeId], references: [id])
+  employeeId       String
+  date             DateTime         @db.Date
+  status           AttendanceStatus @default(ABSENT)
+  checkIn          DateTime?
+  checkOut         DateTime?
+  hoursWorked      Float?
+  // Geo data
+  checkInLat       Float?
+  checkInLng       Float?
+  checkOutLat      Float?
+  checkOutLng      Float?
+  isWFH            Boolean          @default(false)
+  isManualOverride Boolean          @default(false)
+  overrideReason   String?
+  overrideBy       String?
+  notes            String?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  wfhRequest WFHRequest?
+
+  @@unique([employeeId, date])
+  @@index([employeeId])
+  @@index([date])
+  @@index([status])
+}
+
+model WFHRequest {
+  id           String      @id @default(uuid())
+  employee     Employee    @relation(fields: [employeeId], references: [id])
+  employeeId   String
+  date         DateTime    @db.Date
+  reason       String
+  status       WFHStatus   @default(PENDING)
+  adminComment String?
+  attendance   Attendance? @relation(fields: [attendanceId], references: [id])
+  attendanceId String?     @unique
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  @@index([employeeId])
+}
+
+model LeaveType {
+  id              String   @id @default(uuid())
+  name            String   @unique // Casual Leave, Sick Leave, Earned Leave
+  code            String   @unique // CL, SL, EL
+  defaultDays     Int      @default(12)
+  isCarryForward  Boolean  @default(false)
+  maxCarryForward Int      @default(0)
+  isPaid          Boolean  @default(true)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+
+  leaves   Leave[]
+  balances LeaveBalance[]
+}
+
+model Leave {
+  id           String      @id @default(uuid())
+  employee     Employee    @relation(fields: [employeeId], references: [id])
+  employeeId   String
+  leaveType    LeaveType   @relation(fields: [leaveTypeId], references: [id])
+  leaveTypeId  String
+  fromDate     DateTime    @db.Date
+  toDate       DateTime    @db.Date
+  days         Float       @default(1)
+  isHalfDay    Boolean     @default(false)
+  reason       String
+  status       LeaveStatus @default(PENDING)
+  adminComment String?
+  approvedBy   String?
+  approvedAt   DateTime?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  @@index([employeeId])
+  @@index([status])
+  @@index([fromDate, toDate])
+}
+
+model LeaveBalance {
+  id          String    @id @default(uuid())
+  employee    Employee  @relation(fields: [employeeId], references: [id])
+  employeeId  String
+  leaveType   LeaveType @relation(fields: [leaveTypeId], references: [id])
+  leaveTypeId String
+  year        Int
+  total       Float     @default(0)
+  used        Float     @default(0)
+  remaining   Float     @default(0)
+  carriedOver Float     @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([employeeId, leaveTypeId, year])
+  @@index([employeeId])
+}
+
+model PersonalHoliday {
+  id           String      @id @default(uuid())
+  employee     Employee    @relation(fields: [employeeId], references: [id])
+  employeeId   String
+  reason       String // Festival name
+  description  String?
+  fromDate     DateTime    @db.Date
+  toDate       DateTime    @db.Date
+  days         Float       @default(1)
+  status       LeaveStatus @default(PENDING)
+  adminComment String?
+  approvedBy   String?
+  approvedAt   DateTime?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  @@index([employeeId])
+  @@index([status])
+}
+
+model PersonalHolidayBalance {
+  id         String   @id @default(uuid())
+  employee   Employee @relation(fields: [employeeId], references: [id])
+  employeeId String   @unique
+  year       Int
+  total      Int      @default(3)
+  used       Float    @default(0)
+  remaining  Float    @default(3)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model SalaryStructure {
+  id          String            @id @default(uuid())
+  employee    Employee          @relation(fields: [employeeId], references: [id])
+  employeeId  String            @unique
+  basicSalary Float             @default(0)
+  components  SalaryComponent[]
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+}
+
+model SalaryComponent {
+  id          String              @id @default(uuid())
+  structure   SalaryStructure     @relation(fields: [structureId], references: [id], onDelete: Cascade)
+  structureId String
+  name        String // HRA, PF, Medical Allowance...
+  type        SalaryComponentType // EARNING | DEDUCTION
+  calcType    SalaryComponentCalc @default(FIXED)
+  value       Float // flat amount or percentage
+  isActive    Boolean             @default(true)
+  order       Int                 @default(0)
+  createdAt   DateTime            @default(now())
+
+  @@index([structureId])
+}
+
+model SalaryTemplate {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  basicSalary Float    @default(0)
+  components  Json // serialized array of component definitions
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Payroll {
+  id              String        @id @default(uuid())
+  employee        Employee      @relation(fields: [employeeId], references: [id])
+  employeeId      String
+  month           DateTime      @db.Date // First day of month
+  workingDays     Int           @default(26)
+  presentDays     Float         @default(0)
+  lopDays         Float         @default(0)
+  halfDayCount    Float         @default(0)
+  basicSalary     Float         @default(0)
+  grossSalary     Float         @default(0)
+  totalDeductions Float         @default(0)
+  lopAmount       Float         @default(0)
+  halfDayAmount   Float         @default(0)
+  bonus           Float         @default(0)
+  netSalary       Float         @default(0)
+  components      Json? // snapshot of salary components
+  status          PayrollStatus @default(GENERATED)
+  overrideAmount  Float?
+  overrideReason  String?
+  paidDate        DateTime?
+  paidBy          String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@unique([employeeId, month])
+  @@index([employeeId])
+  @@index([month])
+  @@index([status])
+}
+
+model Task {
+  id                 String        @id @default(uuid())
+  title              String
+  description        String?
+  assignedTo         Employee      @relation("TaskAssignee", fields: [assignedToId], references: [id])
+  assignedToId       String
+  createdBy          Employee      @relation("TaskCreator", fields: [createdById], references: [id])
+  createdById        String
+  priority           TaskPriority  @default(MEDIUM)
+  deadline           DateTime
+  status             TaskStatus    @default(PENDING)
+  completionPercent  Int           @default(0)
+  incompletionReason String?
+  isSelfAssigned     Boolean       @default(false)
+  completedAt        DateTime?
+  comments           TaskComment[]
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  @@index([assignedToId])
+  @@index([status])
+  @@index([deadline])
+}
+
+model TaskComment {
+  id        String   @id @default(uuid())
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskId    String
+  authorId  String
+  author    String // name snapshot
+  text      String
+  createdAt DateTime @default(now())
+
+  @@index([taskId])
+}
+
+model GeoLocation {
+  id        String   @id @default(uuid())
+  name      String
+  address   String?
+  latitude  Float
+  longitude Float
+  radius    Int      @default(500) // meters
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Holiday {
+  id        String      @id @default(uuid())
+  name      String
+  date      DateTime    @db.Date
+  type      HolidayType @default(NATIONAL)
+  year      Int
+  createdAt DateTime    @default(now())
+
+  @@index([year])
+  @@index([date])
+}
+
+model CompanySettings {
+  id                  String   @id @default(uuid())
+  name                String   @default("My Company")
+  website             String?
+  email               String?
+  phone               String?
+  address             String?
+  logo                String?
+  employeeIdPrefix    String   @default("EMP")
+  employeeIdCounter   Int      @default(1)
+  workingDaysPerMonth Int      @default(26)
+  financialYearStart  Int      @default(4) // April
+  geoFenceEnabled     Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+}
+
+model EmployeeDocument {
+  id         String   @id @default(uuid())
+  employee   Employee @relation(fields: [employeeId], references: [id])
+  employeeId String
+  name       String
+  fileUrl    String
+  fileType   String?
+  uploadedAt DateTime @default(now())
+
+  @@index([employeeId])
+}
