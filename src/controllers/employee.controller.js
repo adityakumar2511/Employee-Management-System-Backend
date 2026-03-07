@@ -8,6 +8,15 @@ const { success, created, paginated, error, notFound } = require("../utils/respo
 const path = require("path")
 const fs = require("fs")
 
+// ─── Helper: passwordHash aur fcmToken remove karo ───────────────────────────
+const sanitize = (emp) => {
+  if (!emp) return emp
+  const { passwordHash, fcmToken, ...safe } = emp
+  return safe
+}
+
+const sanitizeMany = (emps) => emps.map(sanitize)
+
 // GET /api/employees
 async function getAll(req, res, next) {
   try {
@@ -33,7 +42,6 @@ async function getAll(req, res, next) {
         take: parseInt(limit),
         orderBy: { createdAt: "desc" },
         include: { department: true },
-        omit: { passwordHash: true, fcmToken: true },
       }),
       prisma.employee.count({ where }),
     ])
@@ -41,7 +49,7 @@ async function getAll(req, res, next) {
     return res.json({
       success: true,
       data: {
-        employees,
+        employees: sanitizeMany(employees),
         total,
         page: parseInt(page),
         totalPages: Math.ceil(total / parseInt(limit)),
@@ -58,10 +66,9 @@ async function getById(req, res, next) {
     const employee = await prisma.employee.findUnique({
       where: { id: req.params.id },
       include: { department: true, documents: true },
-      omit: { passwordHash: true, fcmToken: true },
     })
     if (!employee) return notFound(res, "Employee")
-    return success(res, employee)
+    return success(res, sanitize(employee))
   } catch (err) {
     next(err)
   }
@@ -76,7 +83,6 @@ async function create(req, res, next) {
       basicSalary, passwordMode, manualPassword,
     } = req.body
 
-    // Check email uniqueness
     const existing = await prisma.employee.findUnique({ where: { email: email.toLowerCase() } })
     if (existing) return error(res, "Email already exists", 409)
 
@@ -84,7 +90,6 @@ async function create(req, res, next) {
     const tempPassword = passwordMode === "manual" && manualPassword ? manualPassword : generateTempPassword()
     const passwordHash = await bcrypt.hash(tempPassword, 12)
 
-    // Create or find department
     let deptId = departmentId
     if (!deptId && req.body.department) {
       const dept = await prisma.department.upsert({
@@ -114,17 +119,14 @@ async function create(req, res, next) {
         bankIfsc,
       },
       include: { department: true },
-      omit: { passwordHash: true, fcmToken: true },
     })
 
-    // Create salary structure if basicSalary provided
     if (basicSalary) {
       await prisma.salaryStructure.create({
         data: { employeeId: employee.id, basicSalary: parseFloat(basicSalary) },
       })
     }
 
-    // Create leave balances for all leave types
     const leaveTypes = await prisma.leaveType.findMany({ where: { isActive: true } })
     const year = new Date().getFullYear()
     await prisma.leaveBalance.createMany({
@@ -138,12 +140,10 @@ async function create(req, res, next) {
       })),
     })
 
-    // Create personal holiday balance
     await prisma.personalHolidayBalance.create({
       data: { employeeId: employee.id, year, total: 3, used: 0, remaining: 3 },
     })
 
-    // Send welcome email
     try {
       const loginUrl = `${process.env.FRONTEND_URL}/auth/login`
       const emailContent = templates.welcomeEmployee(name, employeeId, email, tempPassword, loginUrl)
@@ -152,7 +152,7 @@ async function create(req, res, next) {
       console.warn("Welcome email failed:", emailErr.message)
     }
 
-    return created(res, { employee, tempPassword }, "Employee created successfully")
+    return created(res, { employee: sanitize(employee), tempPassword }, "Employee created successfully")
   } catch (err) {
     next(err)
   }
@@ -170,16 +170,17 @@ async function update(req, res, next) {
     const employee = await prisma.employee.update({
       where: { id },
       data: {
-        name, phone, departmentId: departmentId || undefined, designation,
+        name, phone,
+        departmentId: departmentId || undefined,
+        designation,
         joiningDate: joiningDate ? new Date(joiningDate) : undefined,
         dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : undefined,
         gender, address, panNumber, bankName, bankAccount, bankIfsc,
       },
       include: { department: true },
-      omit: { passwordHash: true, fcmToken: true },
     })
 
-    return success(res, employee, "Employee updated")
+    return success(res, sanitize(employee), "Employee updated")
   } catch (err) {
     next(err)
   }
@@ -189,7 +190,6 @@ async function update(req, res, next) {
 async function deleteEmployee(req, res, next) {
   try {
     const { id } = req.params
-    // Soft delete: deactivate
     await prisma.employee.update({ where: { id }, data: { status: "INACTIVE" } })
     return success(res, {}, "Employee deactivated")
   } catch (err) {
@@ -214,14 +214,9 @@ async function resetPassword(req, res, next) {
   try {
     const { id } = req.params
     const { newPassword } = req.body
-
     const password = newPassword || generateTempPassword()
     const hash = await bcrypt.hash(password, 12)
-    const employee = await prisma.employee.update({
-      where: { id },
-      data: { passwordHash: hash },
-    })
-
+    await prisma.employee.update({ where: { id }, data: { passwordHash: hash } })
     return success(res, { tempPassword: password }, "Password reset successfully")
   } catch (err) {
     next(err)
@@ -312,7 +307,6 @@ async function bulkImport(req, res, next) {
           })
         }
 
-        // Create leave balances
         const leaveTypes = await prisma.leaveType.findMany({ where: { isActive: true } })
         const year = new Date().getFullYear()
         await prisma.leaveBalance.createMany({
