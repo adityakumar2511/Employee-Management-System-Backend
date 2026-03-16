@@ -53,10 +53,17 @@ async function apply(req, res, next) {
     // Notify admin via FCM
     const admins = await prisma.employee.findMany({ where: { role: "ADMIN", fcmToken: { not: null } } })
     const tokens = admins.map((a) => a.fcmToken).filter(Boolean)
-    await sendPushNotification(tokens[0], {
-      title: "New Leave Request",
-      body: `${req.user.name} applied for ${days} day(s) leave`,
-    })
+    if (tokens[0]) {
+      await sendPushNotification(tokens[0], {
+        title: "New Leave Request",
+        body: `${req.user.name} applied for ${days} day(s) leave`,
+      })
+    }
+
+    // ─── SOCKET EMIT ─────────────────────────────────────────────────────────
+    global.io?.to("admin").emit("data:refresh", { type: "leaves" })
+    global.io?.to("admin").emit("data:refresh", { type: "dashboard" })
+    global.io?.to(`employee:${employeeId}`).emit("data:refresh", { type: "leaves" })
 
     return success(res, leave, "Leave application submitted", 201)
   } catch (err) {
@@ -224,6 +231,12 @@ async function approveLeave(req, res, next) {
     )
     await sendEmail({ to: leave.employee.email, ...emailContent })
 
+    // ─── SOCKET EMIT ─────────────────────────────────────────────────────────
+    global.io?.to("admin").emit("data:refresh", { type: "leaves" })
+    global.io?.to("admin").emit("data:refresh", { type: "dashboard" })
+    global.io?.to(`employee:${leave.employeeId}`).emit("data:refresh", { type: "leaves" })
+    global.io?.to(`employee:${leave.employeeId}`).emit("data:refresh", { type: "attendance" })
+
     return success(res, {}, "Leave approved")
   } catch (err) {
     next(err)
@@ -265,6 +278,11 @@ async function rejectLeave(req, res, next) {
     )
     await sendEmail({ to: leave.employee.email, ...emailContent })
 
+    // ─── SOCKET EMIT ─────────────────────────────────────────────────────────
+    global.io?.to("admin").emit("data:refresh", { type: "leaves" })
+    global.io?.to("admin").emit("data:refresh", { type: "dashboard" })
+    global.io?.to(`employee:${leave.employeeId}`).emit("data:refresh", { type: "leaves" })
+
     return success(res, {}, "Leave rejected")
   } catch (err) {
     next(err)
@@ -282,6 +300,11 @@ async function cancelLeave(req, res, next) {
     if (leave.status === "APPROVED") return error(res, "Cannot cancel an approved leave", 400)
 
     await prisma.leave.update({ where: { id }, data: { status: "CANCELLED" } })
+
+    // ─── SOCKET EMIT ─────────────────────────────────────────────────────────
+    global.io?.to("admin").emit("data:refresh", { type: "leaves" })
+    global.io?.to(`employee:${req.user.id}`).emit("data:refresh", { type: "leaves" })
+
     return success(res, {}, "Leave cancelled")
   } catch (err) {
     next(err)
@@ -337,7 +360,6 @@ async function yearEndCarryForward(req, res, next) {
     for (const balance of balances) {
       const leaveType = carryForwardTypes.find((t) => t.id === balance.leaveTypeId)
 
-      // Create next year balance
       const carryOver = action === "carry" && leaveType
         ? Math.min(balance.remaining, leaveType.maxCarryForward || 0)
         : 0

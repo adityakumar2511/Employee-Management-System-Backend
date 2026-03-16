@@ -89,6 +89,14 @@ async function checkIn(req, res, next) {
       },
     })
 
+    // ─── SOCKET EMIT ─────────────────────────────────────────────────────────
+    global.io?.to("admin").emit("data:refresh", { type: "attendance" })
+    global.io?.to("admin").emit("data:refresh", { type: "dashboard" })
+    global.io?.to(`employee:${req.user.id}`).emit("attendance:updated", {
+      status: wfhApproved ? "WFH" : "PRESENT",
+      checkIn: now,
+    })
+
     return success(res, { attendance, checkInTime: now }, "Checked in successfully")
   } catch (err) {
     next(err)
@@ -125,6 +133,14 @@ async function checkOut(req, res, next) {
         hoursWorked: Math.round(hoursWorked * 100) / 100,
         status: hoursWorked < 4 ? "HALF_DAY" : attendance.status,
       },
+    })
+
+    // ─── SOCKET EMIT ─────────────────────────────────────────────────────────
+    global.io?.to("admin").emit("data:refresh", { type: "attendance" })
+    global.io?.to(`employee:${req.user.id}`).emit("attendance:updated", {
+      status: updated.status,
+      checkOut: now,
+      hoursWorked: updated.hoursWorked,
     })
 
     return success(res, { attendance: updated, hoursWorked: updated.hoursWorked }, "Checked out successfully")
@@ -292,6 +308,10 @@ async function manualOverride(req, res, next) {
       },
     })
 
+    // ─── SOCKET EMIT ─────────────────────────────────────────────────────────
+    global.io?.to("admin").emit("data:refresh", { type: "attendance" })
+    global.io?.to(`employee:${employeeId}`).emit("attendance:updated", { status })
+
     return success(res, attendance, "Attendance updated")
   } catch (err) {
     next(err)
@@ -335,6 +355,9 @@ async function requestWFH(req, res, next) {
       data: { employeeId: req.user.id, date: dateObj, reason },
     })
 
+    // ─── SOCKET EMIT ─────────────────────────────────────────────────────────
+    global.io?.to("admin").emit("data:refresh", { type: "wfh" })
+
     return success(res, request, "WFH request submitted")
   } catch (err) {
     next(err)
@@ -353,6 +376,10 @@ async function approveWFH(req, res, next) {
       data: { status, adminComment: comment },
     })
 
+    // ─── SOCKET EMIT ─────────────────────────────────────────────────────────
+    global.io?.to(`employee:${request.employeeId}`).emit("data:refresh", { type: "wfh" })
+    global.io?.to("admin").emit("data:refresh", { type: "wfh" })
+
     return success(res, request, `WFH request ${status.toLowerCase()}`)
   } catch (err) {
     next(err)
@@ -362,7 +389,6 @@ async function approveWFH(req, res, next) {
 // GET /api/attendance/out-of-range-logs
 async function getOutOfRangeLogs(req, res, next) {
   try {
-    // Records where checkIn geo coords were logged but not within radius
     const logs = await prisma.attendance.findMany({
       where: {
         checkInLat: { not: null },

@@ -45,6 +45,11 @@ async function create(req, res, next) {
       await sendEmail({ to: assignedTo.email, ...emailContent })
     }
 
+    // ─── SOCKET EMIT ─────────────────────────────────────────────────────────
+    global.io?.to("admin").emit("data:refresh", { type: "tasks" })
+    global.io?.to("admin").emit("data:refresh", { type: "dashboard" })
+    global.io?.to(`employee:${assignedTo.id}`).emit("data:refresh", { type: "tasks" })
+
     return success(res, task, "Task created", 201)
   } catch (err) {
     next(err)
@@ -178,6 +183,11 @@ async function update(req, res, next) {
       },
       include: { assignedTo: { select: { id: true, name: true, employeeId: true } } },
     })
+
+    // ─── SOCKET EMIT ─────────────────────────────────────────────────────────
+    global.io?.to("admin").emit("data:refresh", { type: "tasks" })
+    global.io?.to(`employee:${task.assignedToId}`).emit("data:refresh", { type: "tasks" })
+
     return success(res, task, "Task updated")
   } catch (err) {
     next(err)
@@ -213,6 +223,11 @@ async function updateProgress(req, res, next) {
       },
     })
 
+    // ─── SOCKET EMIT ─────────────────────────────────────────────────────────
+    global.io?.to("admin").emit("data:refresh", { type: "tasks" })
+    global.io?.to("admin").emit("data:refresh", { type: "dashboard" })
+    global.io?.to(`employee:${task.assignedToId}`).emit("data:refresh", { type: "tasks" })
+
     return success(res, updated, "Progress updated")
   } catch (err) {
     next(err)
@@ -222,7 +237,15 @@ async function updateProgress(req, res, next) {
 // DELETE /api/tasks/:id
 async function deleteTask(req, res, next) {
   try {
+    const task = await prisma.task.findUnique({ where: { id: req.params.id } })
+    if (!task) return notFound(res, "Task")
+
     await prisma.task.delete({ where: { id: req.params.id } })
+
+    // ─── SOCKET EMIT ─────────────────────────────────────────────────────────
+    global.io?.to("admin").emit("data:refresh", { type: "tasks" })
+    global.io?.to(`employee:${task.assignedToId}`).emit("data:refresh", { type: "tasks" })
+
     return success(res, {}, "Task deleted")
   } catch (err) {
     next(err)
@@ -241,6 +264,14 @@ async function addComment(req, res, next) {
         text: comment,
       },
     })
+
+    // ─── SOCKET EMIT ─────────────────────────────────────────────────────────
+    const task = await prisma.task.findUnique({ where: { id: req.params.id }, select: { assignedToId: true, createdById: true } })
+    global.io?.to("admin").emit("data:refresh", { type: "tasks" })
+    if (task) {
+      global.io?.to(`employee:${task.assignedToId}`).emit("data:refresh", { type: "tasks" })
+    }
+
     return success(res, taskComment, "Comment added", 201)
   } catch (err) {
     next(err)

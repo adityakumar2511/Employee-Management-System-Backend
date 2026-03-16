@@ -47,6 +47,11 @@ async function apply(req, res, next) {
       })
     }
 
+    // ─── SOCKET EMIT ─────────────────────────────────────────────────────────
+    global.io?.to("admin").emit("data:refresh", { type: "personal-holidays" })
+    global.io?.to("admin").emit("data:refresh", { type: "dashboard" })
+    global.io?.to(`employee:${employeeId}`).emit("data:refresh", { type: "personal-holidays" })
+
     return success(res, { holiday, currentBalance: balance.remaining }, "Personal holiday request submitted", 201)
   } catch (err) {
     next(err)
@@ -186,6 +191,11 @@ async function approve(req, res, next) {
       })
     }
 
+    // ─── SOCKET EMIT ─────────────────────────────────────────────────────────
+    global.io?.to("admin").emit("data:refresh", { type: "personal-holidays" })
+    global.io?.to(`employee:${holiday.employeeId}`).emit("data:refresh", { type: "personal-holidays" })
+    global.io?.to(`employee:${holiday.employeeId}`).emit("data:refresh", { type: "attendance" })
+
     return success(res, {}, "Personal holiday approved — no salary deduction will occur")
   } catch (err) {
     next(err)
@@ -210,6 +220,10 @@ async function reject(req, res, next) {
         body: "Your personal holiday request was not approved",
       })
     }
+
+    // ─── SOCKET EMIT ─────────────────────────────────────────────────────────
+    global.io?.to("admin").emit("data:refresh", { type: "personal-holidays" })
+    global.io?.to(`employee:${holiday.employeeId}`).emit("data:refresh", { type: "personal-holidays" })
 
     return success(res, {}, "Personal holiday rejected")
   } catch (err) {

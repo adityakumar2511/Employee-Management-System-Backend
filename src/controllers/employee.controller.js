@@ -152,6 +152,10 @@ async function create(req, res, next) {
       console.warn("Welcome email failed:", emailErr.message)
     }
 
+    // ─── SOCKET EMIT ─────────────────────────────────────────────────────────
+    global.io?.to("admin").emit("data:refresh", { type: "employees" })
+    global.io?.to("admin").emit("data:refresh", { type: "dashboard" })
+
     return created(res, { employee: sanitize(employee), tempPassword }, "Employee created successfully")
   } catch (err) {
     next(err)
@@ -180,6 +184,10 @@ async function update(req, res, next) {
       include: { department: true },
     })
 
+    // ─── SOCKET EMIT ─────────────────────────────────────────────────────────
+    global.io?.to("admin").emit("data:refresh", { type: "employees" })
+    global.io?.to(`employee:${id}`).emit("data:refresh", { type: "profile" })
+
     return success(res, sanitize(employee), "Employee updated")
   } catch (err) {
     next(err)
@@ -191,6 +199,11 @@ async function deleteEmployee(req, res, next) {
   try {
     const { id } = req.params
     await prisma.employee.update({ where: { id }, data: { status: "INACTIVE" } })
+
+    // ─── SOCKET EMIT ─────────────────────────────────────────────────────────
+    global.io?.to("admin").emit("data:refresh", { type: "employees" })
+    global.io?.to("admin").emit("data:refresh", { type: "dashboard" })
+
     return success(res, {}, "Employee deactivated")
   } catch (err) {
     next(err)
@@ -203,6 +216,11 @@ async function toggleStatus(req, res, next) {
     const { id } = req.params
     const { status } = req.body
     await prisma.employee.update({ where: { id }, data: { status } })
+
+    // ─── SOCKET EMIT ─────────────────────────────────────────────────────────
+    global.io?.to("admin").emit("data:refresh", { type: "employees" })
+    global.io?.to("admin").emit("data:refresh", { type: "dashboard" })
+
     return success(res, {}, `Employee ${status === "ACTIVE" ? "activated" : "deactivated"}`)
   } catch (err) {
     next(err)
@@ -325,6 +343,12 @@ async function bulkImport(req, res, next) {
       }
     }
 
+    // ─── SOCKET EMIT ─────────────────────────────────────────────────────────
+    if (results.success.length > 0) {
+      global.io?.to("admin").emit("data:refresh", { type: "employees" })
+      global.io?.to("admin").emit("data:refresh", { type: "dashboard" })
+    }
+
     return success(res, results, `Imported ${results.success.length} employees. ${results.errors.length} errors.`)
   } catch (err) {
     next(err)
@@ -360,6 +384,9 @@ async function uploadDocument(req, res, next) {
         fileType: req.file.mimetype,
       },
     })
+
+    // ─── SOCKET EMIT ─────────────────────────────────────────────────────────
+    global.io?.to(`employee:${id}`).emit("data:refresh", { type: "documents" })
 
     return created(res, doc, "Document uploaded")
   } catch (err) {
