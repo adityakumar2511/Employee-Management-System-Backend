@@ -7,25 +7,48 @@ const {
 } = require("../utils/jwt")
 const { success, error, notFound } = require("../utils/response")
 
+// ─── Retry Helper (Neon pool timeout handle karta hai) ────────────────────────
+async function withRetry(fn, retries = 3) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await fn()
+    } catch (err) {
+      const isPoolError =
+        err.message?.includes("Timed out fetching") ||
+        err.message?.includes("connection pool") ||
+        err.message?.includes("ConnectionReset") ||
+        err.message?.includes("10054")
+
+      if (isPoolError && attempt < retries) {
+        const delay = attempt * 1500
+        console.warn(`⚠️  DB pool error — retry ${attempt}/${retries} in ${delay}ms`)
+        await new Promise((res) => setTimeout(res, delay))
+        try { await prisma.$connect() } catch (_) {}
+        continue
+      }
+      throw err
+    }
+  }
+}
+
 // POST /api/auth/login
 async function login(req, res, next) {
   try {
     const { emailOrEmployeeId, password, role } = req.body
 
-    // Find by email or employeeId
-    const employee = await prisma.employee.findFirst({
-      where: {
-        OR: [
-          { email: emailOrEmployeeId?.toLowerCase() },
-          { employeeId: emailOrEmployeeId },
-        ],
-      },
-      include: { department: true },
-    })
+    const employee = await withRetry(() =>
+      prisma.employee.findFirst({
+        where: {
+          OR: [
+            { email: emailOrEmployeeId?.toLowerCase() },
+            { employeeId: emailOrEmployeeId },
+          ],
+        },
+        include: { department: true },
+      })
+    )
 
-    if (!employee) {
-      return error(res, "Invalid credentials", 401)
-    }
+    if (!employee) return error(res, "Invalid credentials", 401)
 
     if (employee.status === "INACTIVE") {
       return error(res, "Your account has been deactivated. Contact HR.", 403)
@@ -36,30 +59,25 @@ async function login(req, res, next) {
     }
 
     const isValid = await bcrypt.compare(password, employee.passwordHash)
-    if (!isValid) {
-      return error(res, "Invalid credentials", 401)
-    }
+    if (!isValid) return error(res, "Invalid credentials", 401)
 
     const payload = { id: employee.id, role: employee.role }
     const accessToken = generateAccessToken(payload)
     const refreshToken = generateRefreshToken(payload)
 
-    // Store refresh token
-    await prisma.refreshToken.create({
-      data: {
-        token: refreshToken,
-        employeeId: employee.id,
-        expiresAt: getRefreshExpiry(),
-      },
-    })
+    await withRetry(() =>
+      prisma.refreshToken.create({
+        data: {
+          token: refreshToken,
+          employeeId: employee.id,
+          expiresAt: getRefreshExpiry(),
+        },
+      })
+    )
 
     const { passwordHash, fcmToken, ...userData } = employee
 
-    return success(res, {
-      accessToken,
-      refreshToken,
-      user: userData,
-    }, "Login successful")
+    return success(res, { accessToken, refreshToken, user: userData }, "Login successful")
   } catch (err) {
     next(err)
   }
@@ -70,7 +88,9 @@ async function logout(req, res, next) {
   try {
     const { refreshToken } = req.body
     if (refreshToken) {
-      await prisma.refreshToken.deleteMany({ where: { token: refreshToken } })
+      await withRetry(() =>
+        prisma.refreshToken.deleteMany({ where: { token: refreshToken } })
+      )
     }
     return success(res, {}, "Logged out successfully")
   } catch (err) {
@@ -84,14 +104,25 @@ async function refreshToken(req, res, next) {
     const { refreshToken: token } = req.body
     if (!token) return error(res, "Refresh token required", 401)
 
-    const decoded = verifyRefreshToken(token)
-    const stored = await prisma.refreshToken.findUnique({ where: { token } })
+    let decoded
+    try {
+      decoded = verifyRefreshToken(token)
+    } catch (err) {
+      return error(res, "Invalid refresh token", 401)
+    }
+
+    const stored = await withRetry(() =>
+      prisma.refreshToken.findUnique({ where: { token } })
+    )
 
     if (!stored || stored.expiresAt < new Date()) {
       return error(res, "Refresh token expired or invalid", 401)
     }
 
-    const employee = await prisma.employee.findUnique({ where: { id: decoded.id } })
+    const employee = await withRetry(() =>
+      prisma.employee.findUnique({ where: { id: decoded.id } })
+    )
+
     if (!employee || employee.status === "INACTIVE") {
       return error(res, "User not found or inactive", 401)
     }
@@ -99,11 +130,12 @@ async function refreshToken(req, res, next) {
     const accessToken = generateAccessToken({ id: employee.id, role: employee.role })
     const newRefreshToken = generateRefreshToken({ id: employee.id, role: employee.role })
 
-    // Rotate refresh token
-    await prisma.refreshToken.update({
-      where: { token },
-      data: { token: newRefreshToken, expiresAt: getRefreshExpiry() },
-    })
+    await withRetry(() =>
+      prisma.refreshToken.update({
+        where: { token },
+        data: { token: newRefreshToken, expiresAt: getRefreshExpiry() },
+      })
+    )
 
     return success(res, { accessToken, refreshToken: newRefreshToken })
   } catch (err) {
@@ -118,19 +150,24 @@ async function refreshToken(req, res, next) {
 async function forgotPassword(req, res, next) {
   try {
     const { email } = req.body
-    const employee = await prisma.employee.findUnique({ where: { email: email.toLowerCase() } })
 
-    // Always return success (security: don't reveal if email exists)
+    const employee = await withRetry(() =>
+      prisma.employee.findUnique({ where: { email: email.toLowerCase() } })
+    )
+
+    // Security: email exist kare ya na kare — same response
     if (!employee) {
       return success(res, {}, "If your email is registered, you will receive an OTP")
     }
 
     const otp = generateOTP()
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000)
 
-    await prisma.oTP.create({
-      data: { email: email.toLowerCase(), otp, expiresAt, employeeId: employee.id },
-    })
+    await withRetry(() =>
+      prisma.oTP.create({
+        data: { email: email.toLowerCase(), otp, expiresAt, employeeId: employee.id },
+      })
+    )
 
     const emailContent = templates.resetOTP(employee.name, otp)
     await sendEmail({ to: email, ...emailContent })
@@ -146,24 +183,27 @@ async function verifyOTP(req, res, next) {
   try {
     const { email, otp } = req.body
 
-    const otpRecord = await prisma.oTP.findFirst({
-      where: {
-        email: email.toLowerCase(),
-        otp,
-        used: false,
-        expiresAt: { gt: new Date() },
-      },
+    const otpRecord = await withRetry(() =>
+      prisma.oTP.findFirst({
+        where: {
+          email: email.toLowerCase(),
+          otp,
+          used: false,
+          expiresAt: { gt: new Date() },
+        },
+      })
+    )
+
+    if (!otpRecord) return error(res, "Invalid or expired OTP", 400)
+
+    await withRetry(() =>
+      prisma.oTP.update({ where: { id: otpRecord.id }, data: { used: true } })
+    )
+
+    const resetToken = generateAccessToken({
+      id: otpRecord.employeeId,
+      purpose: "reset",
     })
-
-    if (!otpRecord) {
-      return error(res, "Invalid or expired OTP", 400)
-    }
-
-    // Mark OTP as used
-    await prisma.oTP.update({ where: { id: otpRecord.id }, data: { used: true } })
-
-    // Generate a short-lived reset token
-    const resetToken = generateAccessToken({ id: otpRecord.employeeId, purpose: "reset" })
 
     return success(res, { resetToken }, "OTP verified")
   } catch (err) {
@@ -188,13 +228,17 @@ async function resetPassword(req, res, next) {
     }
 
     const hash = await bcrypt.hash(newPassword, 12)
-    await prisma.employee.update({
-      where: { id: decoded.id },
-      data: { passwordHash: hash },
-    })
 
-    // Invalidate all refresh tokens
-    await prisma.refreshToken.deleteMany({ where: { employeeId: decoded.id } })
+    await withRetry(() =>
+      prisma.employee.update({
+        where: { id: decoded.id },
+        data: { passwordHash: hash },
+      })
+    )
+
+    await withRetry(() =>
+      prisma.refreshToken.deleteMany({ where: { employeeId: decoded.id } })
+    )
 
     return success(res, {}, "Password reset successfully")
   } catch (err) {
@@ -206,15 +250,24 @@ async function resetPassword(req, res, next) {
 async function changePassword(req, res, next) {
   try {
     const { currentPassword, newPassword } = req.body
-    const employee = await prisma.employee.findUnique({ where: { id: req.user.id } })
+
+    const employee = await withRetry(() =>
+      prisma.employee.findUnique({ where: { id: req.user.id } })
+    )
+
+    if (!employee) return error(res, "Employee not found", 404)
 
     const isValid = await bcrypt.compare(currentPassword, employee.passwordHash)
-    if (!isValid) {
-      return error(res, "Current password is incorrect", 400)
-    }
+    if (!isValid) return error(res, "Current password is incorrect", 400)
 
     const hash = await bcrypt.hash(newPassword, 12)
-    await prisma.employee.update({ where: { id: req.user.id }, data: { passwordHash: hash } })
+
+    await withRetry(() =>
+      prisma.employee.update({
+        where: { id: req.user.id },
+        data: { passwordHash: hash },
+      })
+    )
 
     return success(res, {}, "Password changed successfully")
   } catch (err) {
@@ -225,11 +278,16 @@ async function changePassword(req, res, next) {
 // GET /api/auth/me
 async function getMe(req, res, next) {
   try {
-    const employee = await prisma.employee.findUnique({
-      where: { id: req.user.id },
-      include: { department: true },
-      omit: { passwordHash: true },
-    })
+    const employee = await withRetry(() =>
+      prisma.employee.findUnique({
+        where: { id: req.user.id },
+        include: { department: true },
+        omit: { passwordHash: true },
+      })
+    )
+
+    if (!employee) return error(res, "Employee not found", 404)
+
     return success(res, employee)
   } catch (err) {
     next(err)
@@ -240,11 +298,19 @@ async function getMe(req, res, next) {
 async function updateFCMToken(req, res, next) {
   try {
     const { fcmToken } = req.body
-    await prisma.employee.update({ where: { id: req.user.id }, data: { fcmToken } })
+    await withRetry(() =>
+      prisma.employee.update({
+        where: { id: req.user.id },
+        data: { fcmToken },
+      })
+    )
     return success(res, {}, "FCM token updated")
   } catch (err) {
     next(err)
   }
 }
 
-module.exports = { login, logout, refreshToken, forgotPassword, verifyOTP, resetPassword, changePassword, getMe, updateFCMToken }
+module.exports = {
+  login, logout, refreshToken, forgotPassword,
+  verifyOTP, resetPassword, changePassword, getMe, updateFCMToken,
+}

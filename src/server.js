@@ -7,6 +7,7 @@ const path = require("path")
 const rateLimit = require("express-rate-limit")
 const http = require("http")
 const { Server } = require("socket.io")
+const prisma = require("./config/database")
 
 const { errorHandler, notFound } = require("./middleware/errorHandler")
 
@@ -25,35 +26,36 @@ const app = express()
 const httpServer = http.createServer(app)
 const PORT = process.env.PORT || 5000
 
-// ─── SOCKET.IO SETUP ──────────────────────────────────────────────────────────
+// ─── SOCKET.IO ────────────────────────────────────────────────────────────────
 const io = new Server(httpServer, {
   cors: {
     origin: process.env.FRONTEND_URL || "http://localhost:3000",
     methods: ["GET", "POST"],
     credentials: true,
   },
+  // ✅ Render free tier ke liye — connection stable rakhna
+  pingTimeout: 60000,
+  pingInterval: 25000,
+  transports: ["websocket", "polling"],
 })
 
-// Socket.io globally available banao (controllers mein use ke liye)
 global.io = io
 
 io.on("connection", (socket) => {
   console.log(`⚡ Client connected: ${socket.id}`)
 
-  // Employee apne room mein join karo (personal notifications ke liye)
   socket.on("join", (employeeId) => {
     socket.join(`employee:${employeeId}`)
     console.log(`👤 Employee ${employeeId} joined their room`)
   })
 
-  // Admin room
   socket.on("joinAdmin", () => {
     socket.join("admin")
     console.log(`🔑 Admin joined admin room`)
   })
 
-  socket.on("disconnect", () => {
-    console.log(`❌ Client disconnected: ${socket.id}`)
+  socket.on("disconnect", (reason) => {
+    console.log(`❌ Client disconnected: ${socket.id} — ${reason}`)
   })
 })
 
@@ -69,12 +71,14 @@ app.use(cors({
   allowedHeaders: ["Content-Type", "Authorization"],
 }))
 
-// Rate limiting
+// ✅ Rate limiting — health check exempt karo
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 500,
   message: { success: false, message: "Too many requests, please try again later" },
-  skip: () => process.env.NODE_ENV === "development",
+  skip: (req) =>
+    process.env.NODE_ENV === "development" ||
+    req.path === "/health",
 })
 
 const authLimiter = rateLimit({
@@ -92,8 +96,31 @@ if (process.env.NODE_ENV !== "test") {
   app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"))
 }
 
-// Serve uploaded files
 app.use("/uploads", express.static(path.join(__dirname, "../uploads")))
+
+// ─── HEALTH CHECK — sabse pehle, kisi bhi middleware se pehle ─────────────────
+app.get("/health", async (req, res) => {
+  // ✅ DB bhi check karo — Neon connected hai ya nahi
+  let dbStatus = "ok"
+  try {
+    await prisma.$queryRaw`SELECT 1`
+  } catch {
+    dbStatus = "error"
+  }
+
+  res.status(dbStatus === "ok" ? 200 : 503).json({
+    status: dbStatus === "ok" ? "ok" : "degraded",
+    service: "EMS Pro API",
+    version: "1.0.0",
+    timestamp: new Date().toISOString(),
+    env: process.env.NODE_ENV,
+    db: dbStatus,
+  })
+})
+
+app.get("/", (req, res) => {
+  res.json({ message: "EMS Pro Backend API", version: "1.0.0" })
+})
 
 // ─── ROUTES ───────────────────────────────────────────────────────────────────
 app.use("/api/auth", authLimiter, authRoutes)
@@ -106,21 +133,6 @@ app.use("/api/tasks", apiLimiter, taskRoutes)
 app.use("/api/settings", apiLimiter, settingsRoutes)
 app.use("/api/reports", apiLimiter, reportRoutes)
 
-// Health check
-app.get("/health", (req, res) => {
-  res.json({
-    status: "ok",
-    service: "EMS Pro API",
-    version: "1.0.0",
-    timestamp: new Date().toISOString(),
-    env: process.env.NODE_ENV,
-  })
-})
-
-app.get("/", (req, res) => {
-  res.json({ message: "EMS Pro Backend API", version: "1.0.0" })
-})
-
 // ─── ERROR HANDLING ───────────────────────────────────────────────────────────
 app.use(notFound)
 app.use(errorHandler)
@@ -132,6 +144,26 @@ httpServer.listen(PORT, () => {
   console.log(`📊 Health check: http://localhost:${PORT}/health`)
   console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`)
   console.log(`─────────────────────────────────────────────\n`)
+})
+
+// ─── GRACEFUL SHUTDOWN ────────────────────────────────────────────────────────
+async function shutdown(signal) {
+  console.log(`\n${signal} received — shutting down gracefully`)
+  await prisma.$disconnect()
+  httpServer.close(() => {
+    console.log("✅ Server closed")
+    process.exit(0)
+  })
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM"))
+process.on("SIGINT", () => shutdown("SIGINT"))
+process.on("uncaughtException", (err) => {
+  console.error("💥 Uncaught Exception:", err)
+  shutdown("uncaughtException")
+})
+process.on("unhandledRejection", (reason) => {
+  console.error("💥 Unhandled Rejection:", reason)
 })
 
 module.exports = { app, io }
