@@ -15,6 +15,6 @@ app.use(express.json())
 app.use('/api/auth', require('./routes/auth.routes'))
 app.use('/api/employees', require('./routes/employee.routes'))
 app.use('/api/attendance', require('./routes/attendance.routes'))
-// ... baaki routes
+// ... Others routes
 
 app.listen(process.env.PORT || 5000)
